@@ -3,7 +3,13 @@ import type { Session } from '../../types/sensors'
 import { useSensors } from '../../hooks/useSensors'
 import { useGeolocation } from '../../hooks/useGeolocation'
 import { useWakeLock } from '../../hooks/useWakeLock'
-import { saveSession, getMotionSamples, getOrientationSamples, getGpsSamples, saveProcessed } from '../../db/database'
+import {
+  saveSession,
+  getMotionSamples,
+  getOrientationSamples,
+  getGpsSamples,
+  saveProcessed,
+} from '../../db/database'
 import { processSession } from '../../processing/processor'
 import { uuid } from '../../utils/id'
 
@@ -14,103 +20,122 @@ interface Props {
 }
 
 export default function MeasurementPage({ onSessionReady }: Props) {
-  const [phase, setPhase] = useState<Phase>('idle')
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [elapsed, setElapsed] = useState(0)
+  const [phase, setPhase]           = useState<Phase>('idle')
+  const [sessionId, setSessionId]   = useState<string | null>(null)
+  const [elapsed, setElapsed]       = useState(0)
   const [sampleCount, setSampleCount] = useState(0)
-  const [error, setError] = useState<string | null>(null)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const startTimeRef = useRef<number>(0)
-  const sampleCountRef = useRef(0)
+  const [error, setError]           = useState<string | null>(null)
 
-  const { permState, requestPermission, startListening, stopListening, latest } =
-    useSensors(sessionId)
-  const { startTracking, stopTracking } = useGeolocation(sessionId)
+  const timerRef      = useRef<ReturnType<typeof setInterval> | null>(null)
+  const startTimeRef  = useRef<number>(0)
+  const sessionIdRef  = useRef<string | null>(null) // mirrors state for use in closures
+
+  // Hooks – note: useSensors/useGeolocation no longer take sessionId as prop;
+  // the session ID is passed directly to startListening/startTracking instead.
+  const { permState, requestPermission, startListening, stopListening, latest } = useSensors()
+  const { startTracking, stopTracking } = useGeolocation()
   const { acquire: acquireWakeLock, release: releaseWakeLock } = useWakeLock()
 
+  // ── Start recording ──────────────────────────────────────────────────────────
   const handleStart = useCallback(async () => {
     setError(null)
-    // 1. Request sensor permissions (must be in user gesture)
+
+    // 1. iOS permission – must be in user gesture handler
     const perm = await requestPermission()
     if (perm === 'denied') {
-      setError('センサーへのアクセスが拒否されました。設定 > Safari > モーションとフィットネスを確認してください。')
+      setError('センサーへのアクセスが拒否されました。設定 › Safari › モーションとフィットネスを確認してください。')
       return
     }
     if (perm === 'unsupported') {
-      setError('このデバイスはDeviceMotionをサポートしていません。')
+      setError('このデバイスは DeviceMotion をサポートしていません。')
       return
     }
 
-    // 2. Create session
+    // 2. Create session record in DB
     const id = uuid()
+    sessionIdRef.current = id
     const session: Session = {
       id,
-      name: `計測 ${new Date().toLocaleString('ja-JP')}`,
-      startTime: Date.now(),
-      endTime: null,
-      status: 'recording',
-      sampleCount: 0,
+      name:          `計測 ${new Date().toLocaleString('ja-JP')}`,
+      startTime:     Date.now(),
+      endTime:       null,
+      status:        'recording',
+      sampleCount:   0,
       gpsSampleCount: 0,
     }
     await saveSession(session)
-    setSessionId(id)
-    sampleCountRef.current = 0
-    setSampleCount(0)
 
-    // 3. Start sensors
-    startListening()
-    startTracking()
+    // 3. Start sensors – pass `id` directly so hooks never see a null sessionId
+    startListening(id)   // sets sessionIdRef inside hook synchronously
+    startTracking(id)
     await acquireWakeLock()
 
-    // 4. UI timer
+    // 4. React state update (for display only – sensors are already running)
+    setSessionId(id)
+    setPhase('recording')
+    setSampleCount(0)
+
     startTimeRef.current = Date.now()
     setElapsed(0)
     timerRef.current = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000))
-      sampleCountRef.current += 1
-      setSampleCount(c => c + 60) // approximate 60Hz
     }, 1000)
-
-    setPhase('recording')
   }, [requestPermission, startListening, startTracking, acquireWakeLock])
 
+  // ── Stop recording ───────────────────────────────────────────────────────────
   const handleStop = useCallback(async () => {
-    if (!sessionId) return
+    const id = sessionIdRef.current
+    if (!id) return
+
     stopListening()
     stopTracking()
     releaseWakeLock()
     if (timerRef.current) clearInterval(timerRef.current)
 
-    // Update session record
-    const motionSamples = await getMotionSamples(sessionId)
-    const gpsSamples    = await getGpsSamples(sessionId)
+    // Load what was written
+    const [motionSamples, orientSamples, gpsSamples] = await Promise.all([
+      getMotionSamples(id),
+      getOrientationSamples(id),
+      getGpsSamples(id),
+    ])
+
+    // Update session metadata
     const updatedSession: Session = {
-      id: sessionId,
-      name: `計測 ${new Date().toLocaleString('ja-JP')}`,
-      startTime: startTimeRef.current,
-      endTime: Date.now(),
-      status: 'processing',
-      sampleCount: motionSamples.length,
+      id,
+      name:          `計測 ${new Date().toLocaleString('ja-JP')}`,
+      startTime:     startTimeRef.current,
+      endTime:       Date.now(),
+      status:        'processing',
+      sampleCount:   motionSamples.length,
       gpsSampleCount: gpsSamples.length,
     }
     await saveSession(updatedSession)
+    setSampleCount(motionSamples.length)
     setPhase('processing')
 
     // Run processing pipeline
-    const orientSamples = await getOrientationSamples(sessionId)
-    const processed = processSession(sessionId, motionSamples, orientSamples, gpsSamples)
+    const processed = processSession(id, motionSamples, orientSamples, gpsSamples)
     await saveProcessed(processed)
-
     await saveSession({ ...updatedSession, status: 'done' })
     setPhase('done')
-  }, [sessionId, stopListening, stopTracking, releaseWakeLock])
+  }, [stopListening, stopTracking, releaseWakeLock])
 
+  // ── Helpers ──────────────────────────────────────────────────────────────────
   const handleView = useCallback(() => {
     if (sessionId) onSessionReady(sessionId)
   }, [sessionId, onSessionReady])
 
+  const handleReset = useCallback(() => {
+    sessionIdRef.current = null
+    setPhase('idle')
+    setSessionId(null)
+    setElapsed(0)
+    setSampleCount(0)
+    setError(null)
+  }, [])
+
   const formatTime = (s: number) => {
-    const m = Math.floor(s / 60).toString().padStart(2, '0')
+    const m   = Math.floor(s / 60).toString().padStart(2, '0')
     const sec = (s % 60).toString().padStart(2, '0')
     return `${m}:${sec}`
   }
@@ -119,23 +144,27 @@ export default function MeasurementPage({ onSessionReady }: Props) {
     <div className="flex flex-col h-full px-4 py-6 gap-6 overflow-y-auto scrollbar-hide">
       <h1 className="text-2xl font-bold text-white text-center tracking-tight">計測</h1>
 
-      {/* G-force display */}
+      {/* Real-time G-force display */}
       <div className="bg-slate-800 rounded-2xl p-5 grid grid-cols-2 gap-4">
-        <GCard label="合計 G" value={latest.gTotal} highlight />
-        <GCard label="横方向" value={latest.gLateral} />
+        <GCard label="合計 G"    value={latest.gTotal}        highlight />
+        <GCard label="横方向"   value={latest.gLateral} />
         <GCard label="進行方向" value={latest.gLongitudinal} />
         <GCard label="上下方向" value={latest.gVertical} />
       </div>
 
-      {/* Status */}
+      {/* Status panel */}
       <div className="bg-slate-800 rounded-2xl p-4 flex flex-col gap-3 text-sm">
         <StatusRow label="センサー権限" value={permLabels[permState]} />
         <StatusRow label="経過時間"     value={formatTime(elapsed)} />
-        <StatusRow label="サンプル数"   value={sampleCount.toLocaleString()} />
+        <StatusRow label="取得サンプル数" value={sampleCount.toLocaleString()} />
         <StatusRow
           label="フェーズ"
           value={phaseLabels[phase]}
-          color={phase === 'recording' ? 'text-red-400' : phase === 'done' ? 'text-green-400' : 'text-slate-300'}
+          color={
+            phase === 'recording'  ? 'text-red-400'    :
+            phase === 'done'       ? 'text-green-400'  :
+            phase === 'processing' ? 'text-yellow-400' : 'text-slate-300'
+          }
         />
       </div>
 
@@ -145,7 +174,7 @@ export default function MeasurementPage({ onSessionReady }: Props) {
         </div>
       )}
 
-      {/* Actions */}
+      {/* Action buttons */}
       <div className="flex flex-col gap-3 mt-auto">
         {phase === 'idle' && (
           <button
@@ -155,6 +184,7 @@ export default function MeasurementPage({ onSessionReady }: Props) {
             計測開始
           </button>
         )}
+
         {phase === 'recording' && (
           <button
             onClick={handleStop}
@@ -163,11 +193,13 @@ export default function MeasurementPage({ onSessionReady }: Props) {
             計測終了
           </button>
         )}
+
         {phase === 'processing' && (
-          <div className="w-full py-4 rounded-2xl bg-slate-700 text-slate-400 font-bold text-lg text-center">
-            処理中...
+          <div className="w-full py-4 rounded-2xl bg-slate-700 text-slate-400 font-bold text-lg text-center animate-pulse">
+            データ処理中...
           </div>
         )}
+
         {phase === 'done' && (
           <>
             <button
@@ -177,7 +209,7 @@ export default function MeasurementPage({ onSessionReady }: Props) {
               結果を表示
             </button>
             <button
-              onClick={() => { setPhase('idle'); setSessionId(null); setElapsed(0); setSampleCount(0) }}
+              onClick={handleReset}
               className="w-full py-3 rounded-2xl bg-slate-700 hover:bg-slate-600 text-slate-300 font-medium transition-colors"
             >
               新しい計測
@@ -191,8 +223,16 @@ export default function MeasurementPage({ onSessionReady }: Props) {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function GCard({ label, value, highlight }: { label: string; value: number; highlight?: boolean }) {
-  const color = value > 3 ? 'text-red-400' : value > 2 ? 'text-yellow-400' : 'text-green-400'
+function GCard({
+  label, value, highlight,
+}: {
+  label: string; value: number; highlight?: boolean
+}) {
+  const absV = Math.abs(value)
+  const color =
+    absV > 3 ? 'text-red-400' :
+    absV > 2 ? 'text-yellow-400' : 'text-green-400'
+
   return (
     <div className="bg-slate-900/60 rounded-xl p-3 flex flex-col items-center gap-1">
       <span className="text-xs text-slate-400 uppercase tracking-widest">{label}</span>
@@ -219,14 +259,14 @@ function StatusRow({
 
 const permLabels: Record<string, string> = {
   unknown:     '未確認',
-  granted:     '許可済み',
+  granted:     '許可済み ✓',
   denied:      '拒否',
   unsupported: '非対応',
 }
 
 const phaseLabels: Record<Phase, string> = {
   idle:       '待機中',
-  recording:  '計測中',
+  recording:  '● 計測中',
   processing: '処理中',
   done:       '完了',
 }
