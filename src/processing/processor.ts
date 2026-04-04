@@ -141,17 +141,22 @@ export function processSession(
     const aNorth = aWorld.y
     const aUp    = aWorld.z + G  // add G to cancel gravity in Up direction
 
-    // Trapezoidal integration: velocity
+    // Trapezoidal integration: velocity → position
     if (i > 0 && dt > 0 && dt < 0.5) {
       vEast  += aEast  * dt
       vNorth += aNorth * dt
       vUp    += aUp    * dt
 
-      // position from velocity
       pEast  += vEast  * dt
       pNorth += vNorth * dt
       pUp    += vUp    * dt
     }
+
+    // Travel heading from velocity vector (0°=North, 90°=East, clockwise)
+    const heading = vEast === 0 && vNorth === 0
+      ? 0
+      : ((Math.atan2(vEast, vNorth) * 180 / Math.PI) + 360) % 360
+    const speed = Math.sqrt(vEast ** 2 + vNorth ** 2 + vUp ** 2)
 
     // ── GPS drift correction ─────────────────────────────────────────────────
     while (gpsIdx < gpsAnchors.length && gpsAnchors[gpsIdx].t <= m.t) {
@@ -184,6 +189,8 @@ export function processSession(
       posEast:  correctedEast,
       posNorth: correctedNorth,
       posUp:    correctedUp,
+      heading,
+      speed,
     })
   }
 

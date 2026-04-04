@@ -59,6 +59,11 @@ export interface ProcessedSample {
   gTotal: number     // magnitude
   // Integrated trajectory (ENU, metres from origin)
   posEast: number; posNorth: number; posUp: number
+  // Heading: travel direction in degrees from North (0=N, 90=E, 180=S, 270=W)
+  // Derived from the instantaneous velocity vector (atan2(vEast, vNorth))
+  heading: number
+  // Instantaneous speed [m/s] from velocity magnitude
+  speed: number
 }
 
 export interface ProcessedSession {

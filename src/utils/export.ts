@@ -19,7 +19,7 @@ export function exportJson(data: ExportData, filename?: string) {
 
 /** Export processed samples as CSV. */
 export function exportCsv(samples: ProcessedSample[], sessionId: string, filename?: string) {
-  const header = 't_s,gLateral,gLongitudinal,gVertical,gTotal,posEast_m,posNorth_m,posUp_m,aEast,aNorth,aUp'
+  const header = 't_s,gLateral,gLongitudinal,gVertical,gTotal,posEast_m,posNorth_m,posUp_m,aEast,aNorth,aUp,heading_deg,speed_ms'
   const rows = samples.map(s =>
     [
       s.t.toFixed(3),
@@ -33,6 +33,8 @@ export function exportCsv(samples: ProcessedSample[], sessionId: string, filenam
       s.aEast.toFixed(4),
       s.aNorth.toFixed(4),
       s.aUp.toFixed(4),
+      s.heading.toFixed(1),
+      s.speed.toFixed(3),
     ].join(',')
   )
   const csv = [header, ...rows].join('\n')
@@ -72,6 +74,8 @@ export async function importFile(file: File): Promise<ExportData> {
         aEast:          f('aEast'),
         aNorth:         f('aNorth'),
         aUp:            f('aUp'),
+        heading:        f('heading_deg'),
+        speed:          f('speed_ms'),
       }
     })
 

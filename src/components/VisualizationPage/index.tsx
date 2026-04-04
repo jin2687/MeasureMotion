@@ -143,6 +143,9 @@ export default function VisualizationPage({ sessionId, onBack, importedData }: P
             <div className="bg-slate-800 rounded-2xl p-4 flex flex-col gap-3 text-sm">
               <StatRow label="最大G" value={`${processed.peakG.toFixed(3)} G`} highlight />
               <StatRow label="平均G" value={`${processed.avgG.toFixed(3)} G`} />
+              <StatRow label="最高速度" value={`${(Math.max(...samples.map(s => s.speed)) * 3.6).toFixed(1)} km/h`} />
+              <StatRow label="出発方位" value={`${samples[0]?.heading.toFixed(0) ?? '-'}° (${bearingLabel(samples[0]?.heading ?? 0)})`} />
+              <StatRow label="到達方位" value={`${samples.at(-1)?.heading.toFixed(0) ?? '-'}° (${bearingLabel(samples.at(-1)?.heading ?? 0)})`} />
               <StatRow label="計測時間" value={`${processed.duration.toFixed(1)} 秒`} />
               <StatRow label="サンプル数" value={samples.length.toLocaleString()} />
               <StatRow label="GPS基点緯度" value={processed.originLat?.toFixed(6) ?? 'なし'} />
@@ -169,6 +172,11 @@ export default function VisualizationPage({ sessionId, onBack, importedData }: P
       </div>
     </div>
   )
+}
+
+function bearingLabel(deg: number): string {
+  const dirs = ['北', '北東', '東', '南東', '南', '南西', '西', '北西']
+  return dirs[Math.round(deg / 45) % 8]
 }
 
 function StatRow({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
