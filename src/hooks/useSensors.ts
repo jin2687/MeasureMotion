@@ -11,6 +11,7 @@
 import { useRef, useState, useCallback } from 'react'
 import type { RawMotionSample, RawOrientationSample } from '../types/sensors'
 import { appendMotion, appendOrientation } from '../db/database'
+import { GravityFilter } from '../processing/fusion'
 
 export type PermissionState = 'unknown' | 'granted' | 'denied' | 'unsupported'
 
@@ -30,6 +31,8 @@ export function useSensors() {
   const activeRef    = useRef(false)
   const sessionIdRef = useRef<string | null>(null)  // always current, no re-render lag
   const lastUiUpdate = useRef(0)
+  // Gravity filter for live display — works at any phone orientation
+  const gravFilter   = useRef(new GravityFilter(0.8))
 
   // ── iOS permission request (must be called from a user gesture) ─────────────
   const requestPermission = useCallback(async (): Promise<PermissionState> => {
@@ -85,12 +88,35 @@ export function useSensors() {
     if (now - lastUiUpdate.current > 100) {
       lastUiUpdate.current = now
       const G = 9.80665
-      // Raw device-frame approximation for live display
-      // iOS: accelerationIncludingGravity.z ≈ -9.81 when face-up, so +G cancels it
-      const gLateral      = axG / G
-      const gLongitudinal = ayG / G
-      const gVertical     = (azG + G) / G
-      const gTotal = Math.sqrt(gLateral ** 2 + gLongitudinal ** 2 + gVertical ** 2)
+
+      // Always update gravity filter with raw accel (needed for gVertical)
+      gravFilter.current.update(axG, ayG, azG)
+      const gf = gravFilter.current
+
+      // Linear acceleration: prefer OS-provided (Core Motion on iOS), fall back to EMA filter
+      const ax = e.acceleration?.x ?? null
+      const ay = e.acceleration?.y ?? null
+      const az = e.acceleration?.z ?? null
+      const linX = ax ?? (axG - gf.gx)
+      const linY = ay ?? (ayG - gf.gy)
+      const linZ = az ?? (azG - gf.gz)
+
+      // gTotal: magnitude of linear accel (orientation-independent, always correct)
+      const gTotal = Math.sqrt(linX ** 2 + linY ** 2 + linZ ** 2) / G
+
+      // gVertical: projection onto the "up" direction (opposite to gravity estimate)
+      // Works correctly at any phone orientation — no compass needed
+      const gravMag = Math.sqrt(gf.gx ** 2 + gf.gy ** 2 + gf.gz ** 2) || G
+      const upX = -gf.gx / gravMag
+      const upY = -gf.gy / gravMag
+      const upZ = -gf.gz / gravMag
+      const gVertical = (linX * upX + linY * upY + linZ * upZ) / G
+
+      // gLateral / gLongitudinal: device-frame components (already gravity-free)
+      // Device X ≈ right (lateral), Device Y ≈ toward top of screen (longitudinal)
+      const gLateral      = linX / G
+      const gLongitudinal = linY / G
+
       setLatest({ gTotal, gLateral, gLongitudinal, gVertical })
     }
   }, []) // stable – no deps, reads via refs
@@ -114,6 +140,7 @@ export function useSensors() {
   const startListening = useCallback((sessionId: string) => {
     sessionIdRef.current = sessionId   // set BEFORE activating, synchronously
     activeRef.current    = true
+    gravFilter.current   = new GravityFilter(0.8)  // re-initialize for current orientation
     window.addEventListener('devicemotion',      handleMotion)
     window.addEventListener('deviceorientation', handleOrientation)
   }, [handleMotion, handleOrientation])

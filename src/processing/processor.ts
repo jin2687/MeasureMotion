@@ -5,11 +5,12 @@
  * Output: ProcessedSession with trajectory and G-force time series
  *
  * Pipeline:
- *   1. Interpolate orientation at each motion sample timestamp
- *   2. Convert device-frame accel → ENU world frame via quaternion rotation
- *   3. Remove gravity (0, 0, +9.80665 m/s² in ENU Up direction)
- *   4. Integrate: accel → velocity → position (trapezoidal rule)
- *   5. GPS sensor fusion: correct accumulated drift at each GPS anchor
+ *   1. Complementary gravity filter: track gravity vector in device frame via EMA
+ *   2. Extract linear acceleration: prefer OS-provided (Core Motion) over software filter
+ *   3. Rotate linear accel to ENU world frame via quaternion (orientation samples)
+ *   4. Integrate: accel → velocity → position (Euler integration)
+ *   5. GPS sensor fusion: set velocity from GPS Doppler speed at each fix;
+ *      apply position correction to reduce accumulated drift
  */
 
 import type {
@@ -25,6 +26,7 @@ import {
   slerp,
   type Quaternion,
 } from './quaternion'
+import { GravityFilter, extractLinearAccel } from './fusion'
 
 const G = 9.80665 // m/s²
 
@@ -102,46 +104,61 @@ export function processSession(
   const originLng = gpsRaw.length > 0 ? gpsRaw[0].lng : null
   const originAlt = gpsRaw.length > 0 ? (gpsRaw[0].alt ?? 0) : 0
 
-  // ── Step 3: integrate motion samples ──────────────────────────────────────
+  // ── Step 3: GPS anchors (ENU positions + Doppler velocity) ─────────────────
+  const gpsAnchors = originLat != null
+    ? gpsRaw.map(g => {
+        const enu = latlngToEnu(g.lat, g.lng, g.alt ?? originAlt, originLat!, originLng!, originAlt)
+        // GPS speed + heading → ENU velocity vector
+        // heading: degrees from North, clockwise (matches navigator.geolocation spec)
+        const hasVelocity = g.speed != null && g.heading != null
+        const headingRad = (g.heading ?? 0) * (Math.PI / 180)
+        return {
+          t:       g.t,
+          east:    enu.east,
+          north:   enu.north,
+          up:      enu.up,
+          vEast:   hasVelocity ? g.speed! * Math.sin(headingRad) : null,
+          vNorth:  hasVelocity ? g.speed! * Math.cos(headingRad) : null,
+        }
+      })
+    : []
+
+  // ── Step 4: integrate motion samples ──────────────────────────────────────
+  const gravFilter = new GravityFilter(0.8)
+
   let vEast = 0, vNorth = 0, vUp = 0
   let pEast = 0, pNorth = 0, pUp = 0
   let prevT = motionRaw[0].t
 
-  const samples: ProcessedSample[] = []
-
-  // GPS anchor lookup: pre-convert GPS to ENU
-  const gpsAnchors = originLat != null
-    ? gpsRaw.map(g => ({
-        t: g.t,
-        east:  latlngToEnu(g.lat, g.lng, g.alt ?? originAlt, originLat!, originLng!, originAlt).east,
-        north: latlngToEnu(g.lat, g.lng, g.alt ?? originAlt, originLat!, originLng!, originAlt).north,
-        up:    latlngToEnu(g.lat, g.lng, g.alt ?? originAlt, originLat!, originLng!, originAlt).up,
-      }))
-    : []
-
   let gpsIdx = 0
-  // Drift correction state (reset when GPS update arrives)
   let driftCorrEast = 0, driftCorrNorth = 0, driftCorrUp = 0
+
+  const samples: ProcessedSample[] = []
 
   for (let i = 0; i < motionRaw.length; i++) {
     const m = motionRaw[i]
     const dt = (m.t - prevT) / 1000  // seconds
     prevT = m.t
 
-    // Use accelerationIncludingGravity (always available on iOS)
-    // iOS reports in m/s², device frame: X=right, Y=up, Z=toward user
-    const axD = m.axG; const ayD = m.ayG; const azD = m.azG
+    // ── Extract gravity-free linear acceleration in device frame ──────────────
+    // Prefer OS-provided (iOS Core Motion does hardware sensor fusion).
+    // Fall back to EMA gravity filter subtraction.
+    const { linX, linY, linZ } = extractLinearAccel(
+      m.axG, m.ayG, m.azG,
+      m.ax,  m.ay,  m.az,
+      gravFilter,
+    )
 
-    // Rotate device-frame accel to ENU world frame
+    // ── Rotate linear accel to ENU world frame ────────────────────────────────
+    // The quaternion from DeviceOrientation maps device frame → ENU.
+    // Since linX/Y/Z is already gravity-free, no gravity subtraction needed.
     const q = interpolateOrientation(orientWithQ, m.t)
-    const aWorld = rotateVector(q, axD, ayD, azD)
-
-    // Remove gravity (ENU: gravity is along -Up = -z_world)
+    const aWorld = rotateVector(q, linX, linY, linZ)
     const aEast  = aWorld.x
     const aNorth = aWorld.y
-    const aUp    = aWorld.z + G  // add G to cancel gravity in Up direction
+    const aUp    = aWorld.z
 
-    // Trapezoidal integration: velocity → position
+    // ── Velocity and position integration ─────────────────────────────────────
     if (i > 0 && dt > 0 && dt < 0.5) {
       vEast  += aEast  * dt
       vNorth += aNorth * dt
@@ -161,26 +178,53 @@ export function processSession(
     // ── GPS drift correction ─────────────────────────────────────────────────
     while (gpsIdx < gpsAnchors.length && gpsAnchors[gpsIdx].t <= m.t) {
       const gps = gpsAnchors[gpsIdx]
-      // Compute drift between GPS and integrated position
+
+      // Position drift: difference between GPS fix and integrated position
       driftCorrEast  = gps.east  - pEast
       driftCorrNorth = gps.north - pNorth
       driftCorrUp    = gps.up    - pUp
-      // Snap velocity to zero when a GPS fix arrives (simple reset)
-      // — prevents velocity drift accumulating between fixes
-      vEast = 0; vNorth = 0; vUp = 0
+
+      // Velocity correction: use GPS Doppler speed+heading when available
+      // (Doppler velocity is ~0.1 m/s accurate vs ~1-3 m/s for position differencing)
+      if (gps.vEast != null && gps.vNorth != null) {
+        vEast  = gps.vEast
+        vNorth = gps.vNorth
+        // Keep vUp from IMU — GPS vertical speed is rarely reliable
+      } else {
+        // No GPS velocity: snap to zero to prevent unbounded drift
+        vEast = 0; vNorth = 0; vUp = 0
+      }
+
       gpsIdx++
     }
-    // Apply accumulated correction (complementary filter, α=0.2 towards GPS)
-    const alpha = 0.2
+
+    // Apply position correction with a complementary filter (α=0.3 towards GPS)
+    // Higher α = stronger GPS pull, lower = smoother trajectory
+    const alpha = 0.3
     const correctedEast  = pEast  + driftCorrEast  * alpha
     const correctedNorth = pNorth + driftCorrNorth * alpha
     const correctedUp    = pUp    + driftCorrUp    * alpha
 
-    // G-force (divide by g)
+    // ── G-force computation ───────────────────────────────────────────────────
+    // gTotal from linear accel magnitude — orientation-independent, always correct.
+    const gTotal = Math.sqrt(linX ** 2 + linY ** 2 + linZ ** 2) / G
+
+    // Gravity direction in device frame (from EMA filter)
+    const gravMag = Math.sqrt(gravFilter.gx ** 2 + gravFilter.gy ** 2 + gravFilter.gz ** 2) || G
+    // "Up" unit vector in device frame (opposite to gravity)
+    const upX = -gravFilter.gx / gravMag
+    const upY = -gravFilter.gy / gravMag
+    const upZ = -gravFilter.gz / gravMag
+
+    // gVertical: projection of linear accel onto the rider "up" direction
+    // This works at any phone orientation without needing compass.
+    const gVertical = (linX * upX + linY * upY + linZ * upZ) / G
+
+    // gLateral / gLongitudinal: ENU-based decomposition for geographic consistency.
+    // East = lateral, North = longitudinal (correct when heading is North;
+    // for arbitrary heading use GPS heading to rotate if needed).
     const gLateral      = aEast  / G
     const gLongitudinal = aNorth / G
-    const gVertical     = aUp    / G
-    const gTotal        = Math.sqrt(gLateral ** 2 + gLongitudinal ** 2 + gVertical ** 2)
 
     samples.push({
       t: (m.t - t0) / 1000,
@@ -194,7 +238,7 @@ export function processSession(
     })
   }
 
-  // ── Step 4: statistics ──────────────────────────────────────────────────────
+  // ── Step 5: statistics ──────────────────────────────────────────────────────
   const gValues = samples.map(s => s.gTotal)
   const peakG = Math.max(...gValues)
   const avgG  = gValues.reduce((a, b) => a + b, 0) / gValues.length
