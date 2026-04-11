@@ -1,5 +1,5 @@
-import { useMemo, useRef } from 'react'
-import { Canvas, useFrame } from '@react-three/fiber'
+import { useMemo } from 'react'
+import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Line, Html } from '@react-three/drei'
 import * as THREE from 'three'
 import type { ProcessedSample } from '../../types/sensors'
@@ -163,33 +163,38 @@ function CompassLabels({
   const d = span * 0.88
   const y = minY + 0.3
 
-  const mkStyle = (color: string) => ({
+  const mkStyle = (color: string, bg: string) => ({
     color,
-    fontSize: 14,
-    fontWeight: 800 as const,
+    background: bg,
+    border: `2px solid ${color}`,
+    fontSize: 16,
+    fontWeight: 900 as const,
+    padding: '4px 10px',
+    borderRadius: 8,
     pointerEvents: 'none' as const,
     userSelect: 'none' as const,
-    textShadow: '0 0 6px #000, 0 0 12px #000',
-    letterSpacing: '0.5px',
+    whiteSpace: 'nowrap' as const,
+    boxShadow: '0 2px 8px #000a',
+    letterSpacing: '1px',
   })
 
   return (
     <>
       {/* 北 N — Three.js -Z direction */}
-      <Html position={[cx, y, cz - d]} center distanceFactor={30}>
-        <div style={mkStyle('#60a5fa')}>北 N ↑</div>
+      <Html position={[cx, y, cz - d]} center distanceFactor={18}>
+        <div style={mkStyle('#60a5fa', '#0f172acc')}>↑ 北 N</div>
       </Html>
       {/* 南 S — Three.js +Z direction */}
-      <Html position={[cx, y, cz + d]} center distanceFactor={30}>
-        <div style={mkStyle('#64748b')}>↓ S 南</div>
+      <Html position={[cx, y, cz + d]} center distanceFactor={18}>
+        <div style={mkStyle('#94a3b8', '#0f172acc')}>南 S ↓</div>
       </Html>
       {/* 東 E — Three.js +X direction */}
-      <Html position={[cx + d, y, cz]} center distanceFactor={30}>
-        <div style={mkStyle('#64748b')}>東 E →</div>
+      <Html position={[cx + d, y, cz]} center distanceFactor={18}>
+        <div style={mkStyle('#94a3b8', '#0f172acc')}>東 E →</div>
       </Html>
       {/* 西 W — Three.js -X direction */}
-      <Html position={[cx - d, y, cz]} center distanceFactor={30}>
-        <div style={mkStyle('#64748b')}>← W 西</div>
+      <Html position={[cx - d, y, cz]} center distanceFactor={18}>
+        <div style={mkStyle('#94a3b8', '#0f172acc')}>← W 西</div>
       </Html>
     </>
   )
@@ -256,17 +261,20 @@ function DistanceRings({
           <Html
             position={[cx + r * 0.72, minY + 0.3, cz - r * 0.72]}
             center
-            distanceFactor={28}
+            distanceFactor={16}
           >
             <div style={{
-              color: '#3b82f6',
-              fontSize: 10,
+              color: '#93c5fd',
+              fontSize: 13,
               fontFamily: 'monospace',
-              fontWeight: 600,
+              fontWeight: 700,
+              padding: '2px 6px',
+              background: '#0f172acc',
+              borderRadius: 4,
               pointerEvents: 'none',
               userSelect: 'none',
               whiteSpace: 'nowrap',
-              textShadow: '0 0 4px #000',
+              boxShadow: '0 1px 4px #000',
             }}>
               {label}
             </div>
@@ -277,18 +285,6 @@ function DistanceRings({
   )
 }
 
-// ─── Auto-rotate when no interaction ─────────────────────────────────────────
-
-function AutoRotate() {
-  const ref = useRef({ active: true })
-  useFrame((state) => {
-    if (ref.current.active) {
-      state.camera.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.002)
-      state.camera.lookAt(0, 0, 0)
-    }
-  })
-  return null
-}
 
 // ─── Grid ─────────────────────────────────────────────────────────────────────
 
@@ -384,7 +380,6 @@ export default function TrajectoryViewer({ samples }: Props) {
         <DistanceRings     span={span} minY={minY} cx={cx} cz={cz} />
 
         <OrbitControls enablePan enableZoom enableRotate />
-        <AutoRotate />
       </Canvas>
 
       {/* Stats overlay */}
