@@ -105,31 +105,21 @@ function StartMarker({ position, span }: { position: THREE.Vector3; span: number
   const poleH = Math.max(span * 0.08, 2)
   return (
     <group position={position}>
-      {/* Pole */}
       <mesh position={[0, poleH / 2, 0]}>
         <cylinderGeometry args={[0.12, 0.12, poleH, 8]} />
         <meshBasicMaterial color="#22c55e" />
       </mesh>
-      {/* Ball */}
       <mesh position={[0, poleH, 0]}>
         <sphereGeometry args={[0.5, 12, 12]} />
         <meshBasicMaterial color="#22c55e" />
       </mesh>
-      {/* HTML label */}
       <Html position={[0, poleH + 1.2, 0]} center distanceFactor={20}>
-        <div
-          style={{
-            background: '#15803d',
-            color: '#fff',
-            padding: '2px 8px',
-            borderRadius: 6,
-            fontSize: 12,
-            fontWeight: 700,
-            whiteSpace: 'nowrap',
-            pointerEvents: 'none',
-            userSelect: 'none',
-          }}
-        >
+        <div style={{
+          background: '#15803d', color: '#fff',
+          padding: '2px 8px', borderRadius: 6,
+          fontSize: 12, fontWeight: 700,
+          whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none',
+        }}>
           START
         </div>
       </Html>
@@ -139,38 +129,151 @@ function StartMarker({ position, span }: { position: THREE.Vector3; span: number
 
 function GoalMarker({ position, span }: { position: THREE.Vector3; span: number }) {
   const poleH = Math.max(span * 0.08, 2)
-  // Chequered flag colours alternating on a 2×2 grid
   return (
     <group position={position}>
-      {/* Pole */}
       <mesh position={[0, poleH / 2, 0]}>
         <cylinderGeometry args={[0.12, 0.12, poleH, 8]} />
         <meshBasicMaterial color="#f87171" />
       </mesh>
-      {/* Ball */}
       <mesh position={[0, poleH, 0]}>
         <sphereGeometry args={[0.5, 12, 12]} />
         <meshBasicMaterial color="#f87171" />
       </mesh>
-      {/* HTML label */}
       <Html position={[0, poleH + 1.2, 0]} center distanceFactor={20}>
-        <div
-          style={{
-            background: '#b91c1c',
-            color: '#fff',
-            padding: '2px 8px',
-            borderRadius: 6,
-            fontSize: 12,
-            fontWeight: 700,
-            whiteSpace: 'nowrap',
-            pointerEvents: 'none',
-            userSelect: 'none',
-          }}
-        >
+        <div style={{
+          background: '#b91c1c', color: '#fff',
+          padding: '2px 8px', borderRadius: 6,
+          fontSize: 12, fontWeight: 700,
+          whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none',
+        }}>
           GOAL
         </div>
       </Html>
     </group>
+  )
+}
+
+// ─── Compass labels (N / E / S / W) ──────────────────────────────────────────
+
+function CompassLabels({
+  cx, minY, cz, span,
+}: {
+  cx: number; minY: number; cz: number; span: number
+}) {
+  const d = span * 0.88
+  const y = minY + 0.3
+
+  const mkStyle = (color: string) => ({
+    color,
+    fontSize: 14,
+    fontWeight: 800 as const,
+    pointerEvents: 'none' as const,
+    userSelect: 'none' as const,
+    textShadow: '0 0 6px #000, 0 0 12px #000',
+    letterSpacing: '0.5px',
+  })
+
+  return (
+    <>
+      {/* 北 N — Three.js -Z direction */}
+      <Html position={[cx, y, cz - d]} center distanceFactor={30}>
+        <div style={mkStyle('#60a5fa')}>北 N ↑</div>
+      </Html>
+      {/* 南 S — Three.js +Z direction */}
+      <Html position={[cx, y, cz + d]} center distanceFactor={30}>
+        <div style={mkStyle('#64748b')}>↓ S 南</div>
+      </Html>
+      {/* 東 E — Three.js +X direction */}
+      <Html position={[cx + d, y, cz]} center distanceFactor={30}>
+        <div style={mkStyle('#64748b')}>東 E →</div>
+      </Html>
+      {/* 西 W — Three.js -X direction */}
+      <Html position={[cx - d, y, cz]} center distanceFactor={30}>
+        <div style={mkStyle('#64748b')}>← W 西</div>
+      </Html>
+    </>
+  )
+}
+
+// ─── Axis lines (faint cross through scene centre) ────────────────────────────
+
+function AxisLines({
+  cx, minY, cz, span,
+}: {
+  cx: number; minY: number; cz: number; span: number
+}) {
+  const y = minY + 0.12
+  const nsPts = useMemo(() => [
+    new THREE.Vector3(cx, y, cz - span),
+    new THREE.Vector3(cx, y, cz + span),
+  ], [cx, cz, span, y])
+  const ewPts = useMemo(() => [
+    new THREE.Vector3(cx - span, y, cz),
+    new THREE.Vector3(cx + span, y, cz),
+  ], [cx, cz, span, y])
+
+  return (
+    <>
+      <Line points={nsPts} color="#1d4ed8" lineWidth={1} />
+      <Line points={ewPts} color="#1d4ed8" lineWidth={1} />
+    </>
+  )
+}
+
+// ─── Distance rings ───────────────────────────────────────────────────────────
+
+function DistanceRings({
+  cx, minY, cz, span,
+}: {
+  cx: number; minY: number; cz: number; span: number
+}) {
+  const ringData = useMemo(() => {
+    // Nice round interval so we get ~3–5 rings
+    const raw = span / 4
+    const mag = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 0.1))))
+    const n = raw / mag
+    const step = n < 2 ? mag : n < 5 ? 2 * mag : 5 * mag
+
+    const result: { r: number; pts: THREE.Vector3[]; label: string }[] = []
+    for (let r = step; r < span * 0.92; r += step) {
+      const pts: THREE.Vector3[] = []
+      for (let i = 0; i <= 64; i++) {
+        const a = (i / 64) * Math.PI * 2
+        pts.push(new THREE.Vector3(cx + Math.cos(a) * r, minY + 0.12, cz + Math.sin(a) * r))
+      }
+      const label = r >= 1000 ? `${(r / 1000).toFixed(1)}km` : `${Math.round(r)}m`
+      result.push({ r, pts, label })
+    }
+    return result
+  }, [cx, minY, cz, span])
+
+  return (
+    <>
+      {ringData.map(({ r, pts, label }) => (
+        <group key={r}>
+          <Line points={pts} color="#1e3a5f" lineWidth={1} />
+          {/* Label placed at NE diagonal of each ring */}
+          <Html
+            position={[cx + r * 0.72, minY + 0.3, cz - r * 0.72]}
+            center
+            distanceFactor={28}
+          >
+            <div style={{
+              color: '#3b82f6',
+              fontSize: 10,
+              fontFamily: 'monospace',
+              fontWeight: 600,
+              pointerEvents: 'none',
+              userSelect: 'none',
+              whiteSpace: 'nowrap',
+              textShadow: '0 0 4px #000',
+            }}>
+              {label}
+            </div>
+          </Html>
+        </group>
+      ))}
+    </>
   )
 }
 
@@ -189,13 +292,17 @@ function AutoRotate() {
 
 // ─── Grid ─────────────────────────────────────────────────────────────────────
 
-function SceneGrid({ span, minY }: { span: number; minY: number }) {
+function SceneGrid({
+  span, minY, cx, cz,
+}: {
+  span: number; minY: number; cx: number; cz: number
+}) {
   const size = span * 2
   const divisions = Math.min(20, Math.max(10, Math.floor(span / 5)))
   return (
     <gridHelper
       args={[size, divisions, '#1e293b', '#1e293b']}
-      position={[0, minY - 0.5, 0]}
+      position={[cx, minY - 0.5, cz]}
     />
   )
 }
@@ -213,14 +320,22 @@ export default function TrajectoryViewer({ samples }: Props) {
 
   const xs = samples.map(s => s.posEast)
   const ys = samples.map(s => s.posUp)
-  const zs = samples.map(s => s.posNorth)
+  const northVals = samples.map(s => s.posNorth)
+
+  const minX = Math.min(...xs), maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const minN = Math.min(...northVals), maxN = Math.max(...northVals)
+
+  // Trajectory bounding-box centre (Three.js coords)
+  const cx = (minX + maxX) / 2
+  const cz = -(minN + maxN) / 2   // Three.js Z = -North
+
   const span = Math.max(
-    Math.max(...xs) - Math.min(...xs),
-    Math.max(...ys) - Math.min(...ys),
-    Math.max(...zs) - Math.min(...zs),
+    maxX - minX,
+    Math.max(...ys) - minY,
+    maxN - minN,
     1,
   )
-  const minY   = Math.min(...ys)
   const camDist = span * 1.5 + 10
 
   const startSample = samples[0]
@@ -229,15 +344,28 @@ export default function TrajectoryViewer({ samples }: Props) {
   const startPos = new THREE.Vector3(startSample.posEast, startSample.posUp, -startSample.posNorth)
   const goalPos  = new THREE.Vector3(goalSample.posEast,  goalSample.posUp,  -goalSample.posNorth)
 
-  // Stats for overlay
-  const peakG     = Math.max(...samples.map(s => s.gTotal))
-  const maxSpeed  = Math.max(...samples.map(s => s.speed))
-  const duration  = goalSample.t
+  // Stats
+  const peakG    = Math.max(...samples.map(s => s.gTotal))
+  const maxSpeed = Math.max(...samples.map(s => s.speed))
+  const duration = goalSample.t
+
+  // Total path length
+  let totalDist = 0
+  for (let i = 1; i < samples.length; i++) {
+    const dx = samples[i].posEast  - samples[i - 1].posEast
+    const dy = samples[i].posUp    - samples[i - 1].posUp
+    const dz = samples[i].posNorth - samples[i - 1].posNorth
+    totalDist += Math.sqrt(dx * dx + dy * dy + dz * dz)
+  }
+  const distLabel = totalDist >= 1000
+    ? `${(totalDist / 1000).toFixed(2)}km`
+    : `${totalDist.toFixed(0)}m`
+
   const startHead = startSample.heading.toFixed(0)
   const goalHead  = goalSample.heading.toFixed(0)
 
   return (
-    <div className="w-full rounded-2xl overflow-hidden bg-slate-900" style={{ height: 340 }}>
+    <div className="w-full rounded-2xl overflow-hidden bg-slate-900" style={{ height: 360 }}>
       <Canvas
         camera={{ position: [camDist, camDist * 0.5, camDist], fov: 50 }}
         gl={{ antialias: true }}
@@ -249,7 +377,11 @@ export default function TrajectoryViewer({ samples }: Props) {
         <DirectionArrows   samples={samples} />
         <StartMarker       position={startPos} span={span} />
         <GoalMarker        position={goalPos}  span={span} />
-        <SceneGrid         span={span}         minY={minY} />
+
+        <SceneGrid         span={span} minY={minY} cx={cx} cz={cz} />
+        <AxisLines         span={span} minY={minY} cx={cx} cz={cz} />
+        <CompassLabels     span={span} minY={minY} cx={cx} cz={cz} />
+        <DistanceRings     span={span} minY={minY} cx={cx} cz={cz} />
 
         <OrbitControls enablePan enableZoom enableRotate />
         <AutoRotate />
@@ -257,14 +389,14 @@ export default function TrajectoryViewer({ samples }: Props) {
 
       {/* Stats overlay */}
       <div className="grid grid-cols-4 bg-slate-900 border-t border-slate-800 text-center text-xs py-2">
-        <StatCell label="最大G"     value={`${peakG.toFixed(2)}G`}   color="text-yellow-400" />
-        <StatCell label="最高速度"  value={`${(maxSpeed * 3.6).toFixed(1)}km/h`} color="text-blue-400" />
-        <StatCell label="計測時間"  value={`${duration.toFixed(0)}s`} color="text-slate-300" />
-        <StatCell label="到達方位"  value={`${goalHead}°`}           color="text-indigo-400" />
+        <StatCell label="最大G"    value={`${peakG.toFixed(2)}G`}             color="text-yellow-400" />
+        <StatCell label="最高速度" value={`${(maxSpeed * 3.6).toFixed(1)}km/h`} color="text-blue-400" />
+        <StatCell label="総距離"   value={distLabel}                           color="text-emerald-400" />
+        <StatCell label="計測時間" value={`${duration.toFixed(0)}s`}           color="text-slate-300" />
       </div>
 
       {/* Legend */}
-      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pb-2 bg-slate-900 text-xs text-slate-400">
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pb-1 bg-slate-900 text-xs text-slate-400">
         <LegendItem color="#22c55e" label="低G / START" />
         <LegendItem color="#facc15" label="中G" />
         <LegendItem color="#ef4444" label="高G / GOAL" />
@@ -273,10 +405,14 @@ export default function TrajectoryViewer({ samples }: Props) {
 
       {/* Heading info */}
       <div className="flex justify-around bg-slate-900 pb-2 text-xs text-slate-500">
-        <span>出発方位: <span className="text-green-400 font-mono">{startHead}°</span>
-          {' '}({bearingLabel(Number(startHead))})</span>
-        <span>到達方位: <span className="text-red-400 font-mono">{goalHead}°</span>
-          {' '}({bearingLabel(Number(goalHead))})</span>
+        <span>
+          出発方位: <span className="text-green-400 font-mono">{startHead}°</span>
+          {' '}({bearingLabel(Number(startHead))})
+        </span>
+        <span>
+          到達方位: <span className="text-red-400 font-mono">{goalHead}°</span>
+          {' '}({bearingLabel(Number(goalHead))})
+        </span>
       </div>
     </div>
   )
