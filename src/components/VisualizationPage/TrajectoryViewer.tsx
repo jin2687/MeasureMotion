@@ -39,7 +39,8 @@ function TrajectoryLine({ samples }: { samples: ProcessedSample[] }) {
     [samples],
   )
   if (points.length < 2) return null
-  return <Line points={points} vertexColors={colors} lineWidth={2.5} />
+  // frustumCulled={false}: Line2 の bounding box 計算ミスによるカリングを防ぐ
+  return <Line points={points} vertexColors={colors} lineWidth={2.5} frustumCulled={false} />
 }
 
 // ─── Direction arrows (every ~5 seconds of data) ──────────────────────────────
@@ -208,19 +209,22 @@ function AxisLines({
   cx: number; minY: number; cz: number; span: number
 }) {
   const y = minY + 0.12
+  // 3点以上にすることで Line2 の bounding box が正しく計算される
   const nsPts = useMemo(() => [
     new THREE.Vector3(cx, y, cz - span),
+    new THREE.Vector3(cx, y, cz),          // 中間点を追加
     new THREE.Vector3(cx, y, cz + span),
   ], [cx, cz, span, y])
   const ewPts = useMemo(() => [
     new THREE.Vector3(cx - span, y, cz),
+    new THREE.Vector3(cx, y, cz),          // 中間点を追加
     new THREE.Vector3(cx + span, y, cz),
   ], [cx, cz, span, y])
 
   return (
     <>
-      <Line points={nsPts} color="#1d4ed8" lineWidth={1} />
-      <Line points={ewPts} color="#1d4ed8" lineWidth={1} />
+      <Line points={nsPts} color="#1d4ed8" lineWidth={1} frustumCulled={false} />
+      <Line points={ewPts} color="#1d4ed8" lineWidth={1} frustumCulled={false} />
     </>
   )
 }
@@ -256,7 +260,7 @@ function DistanceRings({
     <>
       {ringData.map(({ r, pts, label }) => (
         <group key={r}>
-          <Line points={pts} color="#1e3a5f" lineWidth={1} />
+          <Line points={pts} color="#1e3a5f" lineWidth={1} frustumCulled={false} />
           {/* Label placed at NE diagonal of each ring */}
           <Html
             position={[cx + r * 0.72, minY + 0.3, cz - r * 0.72]}
@@ -365,6 +369,7 @@ export default function TrajectoryViewer({ samples }: Props) {
       <Canvas
         camera={{ position: [camDist, camDist * 0.5, camDist], fov: 50 }}
         gl={{ antialias: true }}
+        frameloop="always"
       >
         <color attach="background" args={['#0f172a']} />
         <ambientLight intensity={0.6} />
